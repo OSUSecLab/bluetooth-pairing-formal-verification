@@ -1,0 +1,28 @@
++-----------------------------------------------------------+------------+-----------+-----------+----------+
+|                           lemmas                          | trace_algo | wall_time | user_time | sys_time |
++-----------------------------------------------------------+------------+-----------+-----------+----------+
+|                           auth_A                          |   SEQDFS   |  00:00:12 |  00:00:43 | 00:00:01 |
+|                           auth_B                          |   SEQDFS   |  00:00:12 |  00:00:41 | 00:00:01 |
+|                      data_inject_at_A                     |   SEQDFS   |  00:00:12 |  00:00:42 | 00:00:01 |
+|                      data_inject_at_B                     |   SEQDFS   |  00:00:12 |  00:00:42 | 00:00:01 |
+|                         auth_key_B                        |   SEQDFS   |  00:00:19 |  00:01:00 | 00:00:03 |
+| commitment_msg_can_not_be_decrypted_before_nonce_exchange |   SEQDFS   |  00:00:23 |  00:01:10 | 00:00:03 |
+|                        honestRun_NC                       |   SEQDFS   |  00:00:27 |  00:01:16 | 00:00:04 |
+|                     honestRun_PE_AShow                    |   SEQDFS   |  00:00:40 |  00:01:47 | 00:00:07 |
+|                     honestRun_PE_BShow                    |   SEQDFS   |  00:00:40 |  00:01:47 | 00:00:07 |
+|                  honestRun_PE_Both_Enter                  |   SEQDFS   |  00:00:40 |  00:01:47 | 00:00:06 |
+|                     data_steal_from_B                     |   SEQDFS   |  00:00:41 |  00:01:54 | 00:00:07 |
+|                        auth_data_A                        |   SEQDFS   |  00:01:14 |  00:03:18 | 00:00:13 |
+|             uid_and_DH_private_keys_are_secret            |   SEQDFS   |  00:04:01 |  00:10:14 | 00:00:50 |
+|                   confidentiality_data_B                  |   SEQDFS   |  00:04:26 |  00:11:06 | 00:00:52 |
+|                        auth_data_B                        |   SEQDFS   |  00:18:26 |  00:45:34 | 00:03:38 |
+|                         auth_key_A                        |   SEQDFS   |  00:29:06 |  01:08:27 | 00:05:21 |
+|            confidentiality_sub_property_data_B            |   SEQDFS   |  01:07:49 |  02:45:55 | 00:13:40 |
+|                   confidentiality_key_B                   |   SEQDFS   |  01:09:27 |  02:52:34 | 00:13:40 |
+|                     data_steal_from_A                     |   SEQDFS   |  02:43:37 |  06:42:40 | 00:34:07 |
+|                   confidentiality_key_A                   |   SEQDFS   |  02:59:18 |  07:18:31 | 00:35:11 |
+|            confidentiality_sub_property_data_A            |   SEQDFS   |  02:59:47 |  07:19:25 | 00:35:57 |
+|                   confidentiality_data_A                  |   SEQDFS   |  04:58:08 |  12:15:27 | 00:59:48 |
+|                        auth_weak_A                        |   SEQDFS   |  06:18:35 |  15:31:07 | 01:13:59 |
+|                        auth_weak_B                        |   SEQDFS   |  07:56:02 |  19:25:25 | 01:35:05 |
++-----------------------------------------------------------+------------+-----------+-----------+----------+

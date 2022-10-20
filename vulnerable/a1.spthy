@@ -1,0 +1,1367 @@
+theory a1
+begin
+
+
+/*
+
+> Tamarin Model for Bluetooth Passkey Entry (PE) and Numeric Comparison(NC) Pairing (Vulnerable)
+> This model produces Method Confusion Attack Trace from lemma: data_steal_from_A
+> Patches for Static Passocde Attack and Group Guessing Attack are implemented here. 
+> These patched code can be searched with  "// PATCH:" keyword.
+> A complete explanation for the code and lemmas is provided in the patched model file.     
+
+The run command is:    
+    tamarin-prover --stop-on-trace=SEQDFS --heuristic=i a1.spthy  --prove=data_steal_from_A
+
+Run Time: ~8m 06s
+
+*/
+
+
+
+
+builtins: multiset, symmetric-encryption
+
+
+functions: MAC/2, h/1, split1/1, split2/1, merge/2,
+           dhs/1, dhp/1, dha/2, dhb/2 
+           
+
+equations: merge(split1(v), split2(v)) = v,  // bitsplit equation theory
+           dha(a, dhp(b)) = dhb(b, dhp(a)) // Diffie Hellman equation theory
+
+           
+           // dhp(x):  derive DH public key using DH private random parameter x   
+           
+           // dha(): derive shared key at intiator device A       
+           // dhb(): derive shared key at responder device B       
+
+
+// PATCH: Static Passocde Attack and Group Guessing Attack -- enforce different Kpe in each session 
+restriction random_kpe_in_each_session:
+"
+ (All Kpe #i #j.  KpeValue_A(Kpe)@i & KpeValue_A(Kpe)@j ==> #i=#j)
+ & (All Kpe #i #j.  KpeValue_B(Kpe)@i & KpeValue_B(Kpe)@j ==> #i=#j)
+"
+
+
+restriction equality:
+    "All x y #i. Eq(x, y) @ i ==> x = y"
+
+restriction inequality:
+    "All x y #i. Neq(x, y) @ i ==> not(x = y)"
+
+
+
+// single rule instatiation is sufficient 
+restriction single_MakeIntruder_perUID_is_enough:
+"
+ All uid #i #j.  MakeIntruder(uid)@i & MakeIntruder(uid)@j ==> #i=#j
+ 
+"
+// ---------------------- Generate Entity IDs -----------------------------
+
+                    // instantiate users IDs
+                    rule GenUserIDs [color=#E5E8E8]: 
+                    [Fr(~u)]
+                    --[GenUserIDs(~u)]->
+                    [!User(~u)]
+
+                    
+                    // instantiate devices IDs 
+                    rule GenDeviceAddr [color=#E5E8E8]: 
+                    [!User(u), Fr(~addrX)]
+                    --[GenDeviceAddr(u, ~addrX)]->
+                    [!UserDeviceAddr(u, ~addrX), 
+                     Out(~addrX) // Address are public and can be spoofed
+                     ]
+
+                    // device possession to Intruder is by leaking user ID to public channel 
+                    rule MakeIntruder [color=#CD5C5C]: 
+                    [!User(u)]
+                    --[MakeIntruder(u)]->
+                    [Out(<u>)]
+
+                    // Generate random passcode for Show Passcode step 
+                    rule GenKpe [color=#E5E8E8]: 
+                    let keyOut = senc{~Kpe, 'SetPasscode'}u
+                    in
+                    [!User(u), Fr(~Kpe)]
+                    --[GenKpe(u, ~Kpe)
+
+                    , AUTO_OUT_TERM_1_0_0_0__B_PE_2_both_enter(keyOut)
+                    , AUTO_OUT_TERM_2_0_0_0__A_PE_2_both_enter(keyOut)
+                    , AUTO_OUT_TERM_1_0_0_0__B_PE_2_show(keyOut)
+                    , AUTO_OUT_TERM_2_0_0_0__A_PE_2_show(keyOut)
+
+                
+                    ]->
+                    [Out(keyOut)]
+
+
+
+// beginning of the Pairing Protocol 
+// ---------------------------------------------------------------------------------------
+
+
+
+// Rules on left represent Intiator         // Rules on the right represent Responder  
+// device A                                 // device B
+// ----------------------------------        -----------------------------------------
+
+
+                                            
+// User and Device ID allocation and 
+// address exchange                                               
+rule A_0_addrA [color=#DBF6FA]:
+
+[!UserDeviceAddr(uid, addrA)]
+--[A_0_addrA(uid, addrA), A_thread()]->
+[MemA0(uid, addrA), Out(<addrA, '0'>)]
+
+                                            // User and Device ID allocation and 
+                                            // address exchange
+                                            rule B_0_addrB [color=#F7E6C5]:
+                                            
+                                            [In(<addrA, '0'>), !UserDeviceAddr(uid, addrB)]
+                                            --[B_0_addrB(uid, addrA, addrB), B_thread()
+                                            , Neq(addrA, addrB) // disable same address communication
+                                            ]->
+                                            [MemB0(uid, addrA, addrB), Out(<addrB, '0'>)]
+
+
+// DH Key generation and exchange 
+rule A_1_branch [color=#DBF6FA]:
+let pka = dhp(~ska)
+in 
+[In(<addrB, '0'>), Fr(~ska), MemA0(uid, addrA)]
+--[A_1_branch(uid, addrA, addrB, ~ska, pka)
+, DeviceVarAccess(uid, ~ska)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+, Neq(addrA, addrB) // disable same address communication
+]->
+[MemA_branch(uid, addrA, addrB, ~ska, pka), Out(<pka, '1'>), Out(senc{~ska}uid)]
+                                            
+
+                                            // DH Key generation and exchange
+                                            // Random choice being NC or PE pairing
+                                            rule B_1_branch [color=#F7E6C5]:
+                                            let pkb= dhp(~skb)
+
+                                            in
+                                            [Fr(~skb), In(<pka, '1'>), MemB0(uid, addrA, addrB)]
+                                            --[B_1_branch(uid, addrA, addrB, pka, ~skb, pkb)
+                                                // , Neq(pka, pkb) // PATCH: prevent reflection attack
+                                              , DeviceVarAccess(uid, ~skb)
+                                              , AB_coreVar(uid, addrA, addrB, ~skb)
+                                              ]->
+                                            [MemB_branch_off(uid, addrA, addrB, pka, ~skb, pkb), Out(<pkb, '2a'>), Out(senc{~skb}uid)]
+
+
+                                            // Branch to NC pairing
+                                            rule B_NC_2_cr_pkb [color=#F7E6C5]:
+                                            let ra ='0'
+                                                rb= '0'
+                                                cr = MAC{pkb, pka, rb}~nb
+
+                                            in
+                                            [Fr(~nb), MemB_branch_off(uid, addrA, addrB, pka, ~skb, pkb)]
+                                            --[B_NC_2_cr_pkb(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb, cr)
+                                            , AB_coreVar(uid, addrA, addrB, ~skb)
+                                            , Conf_send(uid, cr, ~nb)
+                                            ]->
+                                            [Out(<cr, '2b'>), MemBNC12(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb, cr), Out(senc{~nb}uid)]
+
+
+                                            // Branch to PE pairing
+                                            // PE: Display Passcode step
+                                            rule B_PE_2_show [color=#F7E6C5]:
+                                            let customPESet = senc{Kpe, 'SetPasscode'}uid
+                                                Kpe_userView_out = senc{Kpe, 'atB'}uid 
+                                                ra = Kpe
+                                                rb = Kpe
+                                                
+                                            in
+                                            [MemB_branch_off(uid, addrA, addrB, pka, ~skb, pkb), In(customPESet)]
+                                            --[ B_PE_2_show(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, Kpe, Kpe_userView_out)
+                                
+                                                , AB_coreVar(uid, addrA, addrB, ~skb)
+
+                                                , AUTO_OUT_TERM_2_0_0_0__A_PE_2_enter(Kpe_userView_out)
+                                                , AUTO_IN_TERM_1_0_0_0__B_PE_2_show(customPESet, Kpe)
+                                                 ,KpeValue_B(Kpe)
+                                               
+                                               ]->
+                                            [ SecCh(Kpe_userView_out),
+                                             MemBPE12(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, Kpe)]
+
+
+
+
+// NC: send nouce 
+rule A_NC_2_na [color=#DBF6FA]:
+let ra ='0'
+    rb= '0'
+in
+[MemA_branch(uid, addrA, addrB, ~ska, pka), In(<pkb, '2a'>), In(<cr_rcv, '2b'>), Fr(~na)]
+--[A_NC_2_na(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na, cr_rcv)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+, Conf_rcv(uid, cr_rcv)]->
+[Out(<~na, '3'>), MemANC23(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na, cr_rcv), Out(senc{~na}uid)]
+
+
+// PE: Display Passcode step
+rule A_PE_2_show [color=#DBF6FA]:
+let customPESet = senc{Kpe, 'SetPasscode'}uid
+    Kpe_userView_out = senc{Kpe, 'atA'}uid 
+    Kpe1 = split1(Kpe)
+    cra1 = senc{pka, pkb, Kpe1}~na1
+    ra = Kpe
+    rb = Kpe
+    
+in
+[MemA_branch(uid, addrA, addrB, ~ska, pka), In(<pkb, '2a'>), In(customPESet), Fr(~na1)]
+--[A_PE_2_show(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe_userView_out, Kpe1, cra1)
+,KpeValue_A(Kpe)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+
+, AUTO_OUT_TERM_1_0_0_0__B_PE_2_enter(Kpe_userView_out)
+, AUTO_IN_TERM_2_0_0_0__A_PE_2_show(customPESet, Kpe)
+
+  // , Neq(pka, pkb) // PATCH: prevent reflection attack
+  , Conf_send(uid, cra1, ~na1)
+]->
+[Out(<cra1, '3'>), SecCh(Kpe_userView_out), 
+ MemAPE23(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1), Out(senc{~na1}uid)]
+
+
+                                            // PE: Enter Passcode step
+                                            rule B_PE_2_enter [color=#F7E6C5]:
+                                            let Kpe_userView_in = senc{Kpe, 'atA'}uid 
+                                                ra = Kpe
+                                                rb = Kpe
+                                                
+                                            in
+                                            [MemB_branch_off(uid, addrA, addrB, pka, ~skb, pkb), SecCh(Kpe_userView_in)]
+                                            --[ B_PE_2_enter(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, Kpe, Kpe_userView_in)
+                                             , KpeValue_B(Kpe)
+                                             , AB_coreVar(uid, addrA, addrB, ~skb)
+                                    
+                                            , AUTO_IN_TERM_1_0_0_0__B_PE_2_enter( Kpe_userView_in, Kpe )
+                                        
+                                               ]->
+                                            [MemBPE12(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, Kpe)]
+
+                                            
+                                            // PE: Both Enter Branch
+                                            rule B_PE_2_both_enter [color=#F7E6C5]:
+                                            let customPESet = senc{Kpe, 'SetPasscode'}uid
+                                                ra = Kpe
+                                                rb = Kpe
+                                                
+                                            in
+                                            [MemB_branch_off(uid, addrA, addrB, pka, ~skb, pkb), In(customPESet)]
+                                            --[ B_PE_2_both_enter(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, Kpe)
+                                                , KpeValue_B(Kpe)
+                                                , AB_coreVar(uid, addrA, addrB, ~skb)
+                                                , AUTO_IN_TERM_1_0_0_0__B_PE_2_both_enter(customPESet, Kpe)
+
+                                               
+                                               ]->
+                                            [MemBPE12(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, Kpe)]
+
+
+                                            
+                                            
+// PE: Enter Passcode step
+rule A_PE_2_enter [color=#DBF6FA]:
+let Kpe1 = split1(Kpe)
+    cra1 = senc{pka, pkb, Kpe1}~na1
+    Kpe_userView_in = senc{Kpe, 'atB'}uid 
+    ra = Kpe
+    rb = Kpe
+
+in
+[MemA_branch(uid, addrA, addrB, ~ska, pka), In(<pkb, '2a'>), SecCh(Kpe_userView_in), Fr(~na1)]
+--[A_PE_2_enter(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe_userView_in, Kpe1, cra1)
+, KpeValue_A(Kpe)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+, AUTO_IN_TERM_2_0_0_0__A_PE_2_enter(Kpe_userView_in, Kpe)
+// , Neq(pka, pkb) // PATCH: prevent reflection attack
+
+]->
+[Out(<cra1, '3'>), MemAPE23(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1), Out(senc{~na1}uid)]
+
+
+// PE: Both Enter branch
+rule A_PE_2_both_enter [color=#DBF6FA]:
+let customPESet = senc{Kpe, 'SetPasscode'}uid
+    Kpe1 = split1(Kpe)
+    cra1 = senc{pka, pkb, Kpe1}~na1
+    ra = Kpe
+    rb = Kpe
+    
+in
+[MemA_branch(uid, addrA, addrB, ~ska, pka), In(<pkb, '2a'>), In(customPESet), Fr(~na1)]
+--[A_PE_2_both_enter(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+, KpeValue_A(Kpe)
+, AUTO_IN_TERM_2_0_0_0__A_PE_2_both_enter(customPESet, Kpe)
+
+// , Neq(pka, pkb) // PATCH: prevent reflection attack
+  
+]->
+[Out(<cra1, '3'>), 
+ MemAPE23(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1), Out(senc{~na1}uid)]
+
+
+                                            
+                                            // NC: Send Nonce
+                                            rule B_NC_3_nb [color=#F7E6C5]:
+
+                                            [MemBNC12(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb, cr), In(<na_rcv, '3'>)]
+                                            --[B_NC_3_nb(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, na_rcv, ~nb, cr)
+                                            , AB_coreVar(uid, addrA, addrB, ~skb)]->
+                                            [ Out(<~nb, '4'>), MemBNC23(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, na_rcv, ~nb, cr)]
+
+                                            // PE: Send commitment loop 1
+                                            rule B_PE_3_crb1 [color=#F7E6C5]:
+                                            let Kpe1 = split1(Kpe)
+                                                crb1 = senc{pkb, pka, Kpe1}~nb1                                            
+                                            in
+                                            [In(<cra1_rcv, '3'>), Fr(~nb1), MemBPE12(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, Kpe)]
+                                            --[B_PE_3_crb1(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, Kpe, Kpe1, crb1, cra1_rcv)
+                                             , AB_coreVar(uid, addrA, addrB, ~skb)
+                                             , Conf_send(uid, crb1, ~nb1)]->
+                                            [ Out(<crb1, '4'>), 
+                                               MemBPE23(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, Kpe, Kpe1, crb1, cra1_rcv), Out(senc{~nb1}uid)]
+
+
+// NC: Display Passcode step
+rule A_NC_3_show [color=#DBF6FA]:
+let cr = MAC{pkb, pka, rb}nb_rcv
+    Knc = MAC{pka, pkb, nb_rcv}~na // numeric comparison values
+    Knc_userview_out = senc{Knc, 'atA'}uid 
+ 
+in  
+
+[MemANC23(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na, cr_rcv),
+ In(<nb_rcv, '4'>)]
+--[A_NC_3_show(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na, nb_rcv, cr_rcv, Knc, Knc_userview_out)
+  , Eq(cr, cr_rcv)
+  , AB_coreVar(uid, addrA, addrB, ~ska)
+  , AUTO_OUT_TERM_1_0_0_0__B_PE_2_enter(Knc_userview_out)
+  
+  ]->
+[SecCh(Knc_userview_out), 
+MemANC34(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na, nb_rcv, cr_rcv, Knc, Knc_userview_out)]
+
+
+// PE: Send nonce
+rule A_PE_3_na1 [color=#DBF6FA]:
+[MemAPE23(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1), 
+ In(<crb1_rcv, '4'>)]
+--[A_PE_3_na1(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1, crb1_rcv)
+, AB_coreVar(uid, addrA, addrB, ~ska)]->
+[Out(<~na1, '5'>), 
+  MemAPE34(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1, crb1_rcv)]
+
+
+                                            // NC: Display Passcode step
+                                            rule B_NC_4_show [color=#F7E6C5]:
+                                            let Knc =  MAC{pka, pkb, ~nb}na_rcv
+                                                Knc_userview_out = senc{Knc, 'atB'}uid 
+                                            in 
+                                            [SecCh(Knc_userview_in), 
+                                              MemBNC23(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, na_rcv, ~nb, cr)
+                                             ]
+                                            --[B_NC_4_show(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, na_rcv, ~nb, cr, Knc, Knc_userview_out, Knc_userview_in)
+                               
+                                                 , AB_coreVar(uid, addrA, addrB, ~skb)
+                                                 , AUTO_OUT_TERM_2_0_0_0__A_PE_2_enter(Knc_userview_out)
+                                               ]->
+                                            [ SecCh( Knc_userview_out)
+                                            , MemBNC34(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, na_rcv, ~nb, cr, Knc, Knc_userview_out, Knc_userview_in)]
+
+
+                                            // NC: Verify Passcode and close random choice of NC branch and merge to common key derivation phase
+                                            rule B_NC_5_verify_close [color=#F7E6C5]:
+                                            let kpe1_dummy = split1(~dummy)
+                                                kpe2_dummy = split2(~dummy)
+                                                cra1_dummy = senc{pka, pkb, kpe1_dummy}~dummy
+                                                cra2_dummy = senc{pka, pkb, kpe2_dummy}~dummy
+
+                                            in
+                                            
+                                            [MemBNC34(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, na_rcv, ~nb, cr, Knc, Knc_userview_out, Knc_userview_in), Fr(~dummy)
+                                             ]
+                                            --[B_NC_5_verify_close(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, na_rcv, ~nb, cr, Knc, Knc_userview_out, Knc_userview_in)
+                                                , Eq(senc{Knc, 'atA'}uid , Knc_userview_in) 
+                                               , AB_coreVar(uid, addrA, addrB, ~skb)
+                                               ]->
+                                            [  MemBclose(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~dummy,   ~nb, ~dummy,  kpe1_dummy,   kpe2_dummy, cra1_dummy,  cra2_dummy,      cra1_dummy,       ~dummy,      cra2_dummy, na_rcv)]
+                                            // added dummy values to match common next rule
+
+                                            // PE: send nonce
+                                            rule B_PE_4_nb1 [color=#F7E6C5]:
+                                            let cra1_check = senc{pka, pkb, Kpe1}na1_rcv
+                                            in 
+                                            [In(<na1_rcv, '5'>), 
+                                              MemBPE23(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, Kpe, Kpe1, crb1, cra1_rcv)]
+                                            --[B_PE_4_nb1(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, Kpe, Kpe1, crb1, cra1_rcv, na1_rcv)
+                                             , Eq(cra1_check, cra1_rcv)
+                                             , AB_coreVar(uid, addrA, addrB, ~skb)]->
+                                            [ Out(<~nb1, '6'>), 
+                                              MemBPE34(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, Kpe, Kpe1, crb1, cra1_rcv, na1_rcv)]
+
+
+//PE: send commitment loop 2 
+rule A_PE_4_cra2 [color=#DBF6FA]:
+let Kpe2 = split2(Kpe)
+    cra2 = senc{pka, pkb, Kpe2}~na2
+    crb1_check = senc{pkb, pka, Kpe1}nb1_rcv 
+in
+[MemAPE34(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, Kpe, Kpe1, cra1, crb1_rcv), Fr(~na2)
+ , In(<nb1_rcv, '6'>)]
+--[A_PE_4_cra2(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv)
+  , AB_coreVar(uid, addrA, addrB, ~ska)
+   , Eq(crb1_check, crb1_rcv)
+   , Conf_send(uid, cra2, ~na2)]->
+[Out(<cra2, '7'>), 
+  MemAPE45(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv), Out(senc{~na2}uid)]
+
+                                            //PE: send commitment loop 2 
+                                            rule B_PE_5_crb2 [color=#F7E6C5]:
+                                            let Kpe2 = split2(Kpe)
+                                                crb2 = senc{pkb, pka, Kpe2}~nb2                                         
+                                            in
+                                            [In(<cra2_rcv, '7'>), Fr(~nb2), 
+                                              MemBPE34(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, Kpe, Kpe1, crb1, cra1_rcv, na1_rcv)]
+                                            --[B_PE_5_crb2(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv)
+                                              , AB_coreVar(uid, addrA, addrB, ~skb)
+                                              , Conf_send(uid, crb2, ~nb2)]->
+
+                                            [ Out(<crb2, '8'>), 
+                                               MemBPE45(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv), Out(senc{~nb2}uid)]
+                                         
+
+//PE: send nonce loop 2 
+rule A_PE_5_na2 [color=#DBF6FA]:
+[MemAPE45(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv)
+ , In(<crb2_rcv, '8'>)]
+--[A_PE_5_na2(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv)
+, AB_coreVar(uid, addrA, addrB, ~ska)]->
+[Out(<~na2, '9'>), 
+  MemAPE46(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv)]
+
+                                            //PE: verify commitment loop 2 
+                                            rule B_PE_6_nb2_close [color=#F7E6C5]:
+                                            let cra2_check = senc{pka, pkb, Kpe2}na2_rcv
+                                            in 
+                                            [In(<na2_rcv, '9'>), 
+                                              MemBPE45(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv)]
+                                            --[B_PE_6_nb2_close(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv)
+                                              , AB_coreVar(uid, addrA, addrB, ~skb)
+                                              , Eq(cra2_check, cra2_rcv) ]->
+
+                                            [ Out(<~nb2, '10'>), 
+                                              MemBclose(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv)]
+
+
+
+
+//NC: Confirm passcode and close random choice of NC branch 
+// and merge to common key derivation phase
+rule A_NC_4_verify_close [color=#DBF6FA]:
+let kpe1_dummy = split1(~dummy)
+    kpe2_dummy = split2(~dummy)
+    cra1_dummy = senc{pka, pkb, kpe1_dummy}~na
+    // dummy_senc = senc{~dummy}~dummy
+    cra2_dummy = senc{pka, pkb, kpe2_dummy}~na
+
+in
+[SecCh(Knc_userview_in)
+ , MemANC34(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na, nb_rcv, cr_rcv, Knc, Knc_userview_out)
+ , Fr(~dummy)
+ ]
+--[A_NC_4_verify_close(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na, nb_rcv, cr_rcv, Knc, Knc_userview_out, Knc_userview_in)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+, Eq(Knc_userview_in, senc{ Knc, 'atB'}uid) 
+]->
+[
+   MemAclose(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~dummy,  ~na,     ~dummy,  kpe1_dummy,  kpe2_dummy,  cra1_dummy,   cra2_dummy,      cra1_dummy,   ~dummy,      cra2_dummy,  nb_rcv)]
+// added dummy values to match common next rule
+
+
+
+//PE: verify commitment loop 2
+// close random choice of PE branch 
+// merge to common key derivation phase                           
+rule A_PE_6_close [color=#DBF6FA]:
+let    crb2_check = senc{pkb, pka, Kpe2}nb2_rcv 
+in 
+[ In(<nb2_rcv, '10'>)
+  , MemAPE46(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv)]
+--[A_PE_6_close(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+, Eq(crb2_check, crb2_rcv)]->
+[MemAclose(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv)]
+
+
+// ------------------------------------------------ Key Derivation and Authentication Phase 2 ----------------------
+
+// Derive keys and send commitment
+rule A_7_ea [color=#DBF6FA]:
+let Kdh = dha(~ska, pkb) 
+    Kmac = MAC{'0', ~na2, nb2_rcv, addrA, addrB}Kdh 
+    Klt = MAC{'1', ~na2, nb2_rcv, addrA, addrB}Kdh
+    ea = MAC{~na2, nb2_rcv, rb, addrA, addrB, '11'}Kmac
+in 
+[MemAclose(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv)]
+--[A_7_ea(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea)
+, Kdh_derivation(uid, addrA, ~ska, Kdh)
+, Kdh_derivation_A(uid, addrA, ~ska, Kdh)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+ ]->
+[Out(ea),
+MemA78(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea)
+]
+
+                          
+                                            // Derive keys and send commitment
+                                            rule B_7_eb [color=#F7E6C5]:
+                                            let Kdh = dhb(~skb, pka)  // Kdh stands for derived key
+                                                Kmac = MAC{'0', na2_rcv, ~nb2, addrA, addrB}Kdh 
+                                                Klt = MAC{'1', na2_rcv, ~nb2, addrA, addrB}Kdh
+                                                eb = MAC{~nb2, na2_rcv, ra, addrB, addrA, '12'}Kmac
+                                                ea_rcv = MAC{na2_rcv, ~nb2, rb, addrA, addrB, '11'}Kmac //pattern match verify
+                                            in         
+                                            [MemBclose(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv), In(ea_rcv)
+                                            ]
+                                            --[B_7_eb(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv, Kdh, Klt, Kmac, eb, ea_rcv)
+                                            , AB_coreVar(uid, addrA, addrB, ~skb)
+                                            , Kdh_derivation(uid, addrB, ~skb, Kdh)
+                                            , Kdh_derivation_B(uid, addrB, ~skb, Kdh)
+                                    
+                                            ]->
+                                            [MemB78(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv, Kdh, Klt, Kmac, eb, ea_rcv), Out(eb)]
+
+
+// ------------------------------------------------ Key Derivation and Authentication Phase 2 ----------------------
+
+// Derive keys and send commitment
+rule A_8_randA [color=#DBF6FA]: 
+let eb_rcv = MAC{nb2_rcv, ~na2, ra, addrB, addrA, '12'}Kmac  //pattern match verify
+in 
+[MemA78(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea), Fr(~randA), In(eb_rcv)]
+--[A_8_randA(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea, eb_rcv, ~randA)
+, Kdh_derivation(uid, addrA, ~ska, Kdh)
+, Kdh_derivation_A(uid, addrA, ~ska, Kdh)
+, AB_coreVar(uid, addrA, addrB, ~ska)
+ ]->
+[Out(<~randA, '13'>),
+MemA79(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea, eb_rcv, ~randA)
+]
+
+
+                                              // Derive session key Ks; receive data; and send acknowledgement 
+                                            rule B_8_randA [color=#F7E6C5]:
+                                            
+                                            [MemB78(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv, Kdh, Klt, Kmac, eb, ea_rcv)
+                                             , In(<randA_rcv, '13'>)
+                                             , Fr(~randB)]
+                                            --[B_8_randA(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv, Kdh, Klt, Kmac, eb, ea_rcv, randA_rcv, ~randB)
+                                               , AB_coreVar(uid, addrA, addrB, ~skb)                                               
+                                                ]->
+                                            [
+                                            MemB79(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv, Kdh, Klt, Kmac, eb, ea_rcv, randA_rcv, ~randB)
+                                            , Out(<~randB, '14'>) 
+                                            ]
+
+
+// Derive session key Ks and send data
+rule A_9_sendD [color=#DBF6FA]: 
+let Ks = senc{~randA, randB_rcv}Klt // Ks stands for session key
+    
+in
+[MemA79(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea, eb_rcv, ~randA)
+   , In(<randB_rcv, '14'>)
+ , Fr(~data)
+ ]
+--[A_9_sendD(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea, eb_rcv, ~randA, randB_rcv, ~data, Ks) 
+  , AB_coreVar(uid, addrA, addrB, ~ska)
+  , A_send(uid, addrA, addrB, ~data, Ks)
+
+  , AUTO_OUT_TERM_1_0_0_0__B_PE_2_both_enter(Ks)
+  , AUTO_OUT_TERM_1_0_0_0__B_PE_2_enter(Ks)
+  , AUTO_OUT_TERM_2_0_0_0__A_PE_2_both_enter(Ks)
+  , AUTO_OUT_TERM_2_0_0_0__A_PE_2_enter(Ks)
+  , AUTO_OUT_TERM_1_0_0_0__B_PE_2_show(Ks)
+  , AUTO_OUT_TERM_2_0_0_0__A_PE_2_show(Ks)
+
+
+   ]->
+[Out(<senc{~data, 'D'}Ks, MAC(~data, Ks)>)
+, Out(senc{~data}uid) // this maynot be necessary
+, MemA910(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea, eb_rcv, ~randA, randB_rcv, ~data, Ks)
+]
+
+                          
+                                            // Derive session key Ks; receive data; and send acknowledgement 
+                                            rule B_9_rcvD [color=#F7E6C5]:
+                                            let Ks = senc{randA_rcv, ~randB}Klt // Ks stands for session key
+    
+                                            in
+                                            [MemB79(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv, Kdh, Klt, Kmac, eb, ea_rcv, randA_rcv, ~randB)
+                                             , In(<senc{data_rcv, 'D'}Ks, msgMAC>)
+                                             , Fr(~ack)]
+                                            --[B_9_rcvD(uid, addrA, addrB, pka, ~skb, pkb, ra, rb, ~nb1, ~nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1_rcv, na1_rcv, cra2_rcv, na2_rcv, Kdh, Klt, Kmac, eb, ea_rcv, randA_rcv, ~randB,  data_rcv, Ks, ~ack)
+                                               , AB_coreVar(uid, addrA, addrB, ~skb)
+                                               , Eq(msgMAC, MAC(data_rcv, Ks))
+                                               , B_rcv(uid, addrA, addrB, data_rcv, Ks)
+                                               , B_send(uid, addrA, addrB, ~ack, Ks)
+                                               , KeyChain(uid, addrB, ~skb, Kdh, Kmac, Ks)
+                                                ]->
+                                            [Out(<senc{~ack, 'A'}Ks, MAC(~ack, Ks)>)
+                                            , Out(senc{~ack}uid) 
+                                            ]
+
+
+// receive acknowledgement
+rule A_10_rcvAck [color=#DBF6FA]: 
+
+[MemA910(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea, eb_rcv, ~randA, randB_rcv, ~data, Ks)
+ , In(<senc{ack_rcv, 'A'}Ks, msgMAC>)
+ 
+ ]
+--[A_10_rcvAck(uid, addrA, addrB, ~ska, pka, pkb, ra, rb, ~na1, ~na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1_rcv, nb1_rcv, crb2_rcv, nb2_rcv, Kdh, Kmac, Klt, ea, eb_rcv, ~randA, randB_rcv, ~data, Ks, ack_rcv)
+  , Eq(msgMAC, MAC(ack_rcv, Ks))
+  , A_rcv(uid, addrA, addrB, ack_rcv, Ks)
+  , AB_coreVar(uid, addrA, addrB, ~ska)
+  , KeyChain_A(uid, addrA, ~ska, Kdh, Kmac, Ks)
+  , KeyChain(uid, addrA, ~ska, Kdh, Kmac, Ks)
+   ]->
+[]
+
+
+
+
+// tamarin-prover --stop-on-trace=SEQDFS a1.spthy --prove="honest*" --prove=AUTO_typing_src --prove=GenUserIDs_before_GenKpe_src --prove=uid_and_DH_private_keys_are_secret --prove=commitment_msg_can_not_be_decrypted_before_nonce_exchange
+
+// ==============================================================================
+// summary of summaries:
+
+// analyzed: a1.spthy
+
+//   GenUserIDs_before_GenKpe_src (all-traces): verified (7 steps)
+//   AUTO_typing_src (all-traces): verified (366 steps)
+//   honestRun_PE_BShow (exists-trace): verified (45 steps)
+//   honestRun_PE_AShow (exists-trace): verified (45 steps)
+//   honestRun_PE_Both_Enter (exists-trace): verified (44 steps)
+//   honestRun_NC (exists-trace): verified (37 steps)
+//   uid_and_DH_private_keys_are_secret (all-traces): verified (517 steps)
+//   commitment_msg_can_not_be_decrypted_before_nonce_exchange (all-traces): verified (49 steps)
+
+// ==============================================================================
+// ~ 21m 44s
+
+
+// -------------------------------------- Source lemmas -----------------------=-----------------------------
+// ----------------------------------------------------------------------------------------------------------
+
+
+lemma GenUserIDs_before_GenKpe_src [sources]:
+    "
+    All u Kpe #gk.
+     GenKpe(u, Kpe) @gk 
+
+    ==> 
+    Ex #gui. GenUserIDs(u) @gui 
+    & (#gui < #gk) 
+
+    "
+
+
+
+lemma AUTO_typing_src [sources]:
+  all-traces
+  "((((((⊤) ∧
+        (∀ x m #i.
+          (AUTO_IN_TERM_2_0_0_0__A_PE_2_show( m, x ) @ #i) ⇒
+          ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨
+           (∃ #j. (AUTO_OUT_TERM_2_0_0_0__A_PE_2_show( m ) @ #j) ∧ (#j < #i))))) ∧
+       (∀ x m #i.
+         (AUTO_IN_TERM_1_0_0_0__B_PE_2_show( m, x ) @ #i) ⇒
+         ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨
+          (∃ #j. (AUTO_OUT_TERM_1_0_0_0__B_PE_2_show( m ) @ #j) ∧ (#j < #i))))) ∧
+      (∀ x m #i.
+        (AUTO_IN_TERM_2_0_0_0__A_PE_2_enter( m, x ) @ #i) ⇒
+        ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨
+         (∃ #j. (AUTO_OUT_TERM_2_0_0_0__A_PE_2_enter( m ) @ #j) ∧ (#j < #i))))) ∧
+     (∀ x m #i.
+       (AUTO_IN_TERM_2_0_0_0__A_PE_2_both_enter( m, x ) @ #i) ⇒
+       ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨
+        (∃ #j.
+          (AUTO_OUT_TERM_2_0_0_0__A_PE_2_both_enter( m ) @ #j) ∧ (#j < #i))))) ∧
+    (∀ x m #i.
+      (AUTO_IN_TERM_1_0_0_0__B_PE_2_enter( m, x ) @ #i) ⇒
+      ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨
+       (∃ #j. (AUTO_OUT_TERM_1_0_0_0__B_PE_2_enter( m ) @ #j) ∧ (#j < #i))))) ∧
+   (∀ x m #i.
+     (AUTO_IN_TERM_1_0_0_0__B_PE_2_both_enter( m, x ) @ #i) ⇒
+     ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨
+      (∃ #j.
+        (AUTO_OUT_TERM_1_0_0_0__B_PE_2_both_enter( m ) @ #j) ∧ (#j < #i))))"
+
+
+
+// ------------------------------------------ Honest Runs --------------------------------------------------- 
+// ----------------------------------------------------------------------------------------------------------
+
+    // PE with B showing passcode
+    lemma honestRun_PE_BShow [heuristic=s]:
+         exists-trace
+         "
+         Ex
+         addrA
+         addrB
+
+         uid
+
+         #A_0_addrA
+         #B_0_addrB
+
+
+         ska pka
+         #A_1_branch
+
+
+         skb pkb userView Kpe
+         #B_1_branch
+         ra
+         rb 
+
+         #B_PE_2_show
+
+         na1 Kpe1 cra1
+         #A_PE_2_enter
+
+         nb1 crb1
+         #B_PE_3_crb1
+
+
+         #A_PE_3_na1
+
+         #B_PE_4_nb1
+
+         na2 Kpe2 cra2
+         #A_PE_4_cra2
+
+         nb2 crb2
+         #B_PE_5_crb2
+
+         #A_PE_5_na2
+
+         #B_PE_6_nb2_close
+
+         #A_PE_6_close
+
+         Kdh Kmac Klt ea
+         #A_7_ea
+
+        eb
+         #B_7_eb
+
+         randA randB
+         #B_8_randA
+         #A_8_randA
+
+
+         data Ks  
+         #A_9_sendD
+
+         ack
+         #B_9_rcvD
+         #A_10_rcvAck
+
+
+         .
+
+         // restrict one user
+
+         (All u1 u2 #guid1 #guid2. GenUserIDs(u1) @guid1 & GenUserIDs(u2) @guid2 ==> #guid1 = #guid2) 
+         
+         // restrict one Kpe
+         & (All u1 Kpe1 u2 Kpe2 #gKpe1 #gKpe2. GenKpe(u1, Kpe1) @gKpe1 & GenKpe(u2, Kpe2) @gKpe2 ==> #gKpe1 = #gKpe2) 
+
+         // restrict one A side thread
+         & (All #t1 #t2. A_thread() @t1 & A_thread() @t2   ==> #t1 = #t2) 
+
+         // restrict one B side thread
+         & (All #t1 #t2. B_thread() @t1 & B_thread() @t2   ==> #t1 = #t2) 
+
+         // without intruder 
+         & (All u #t1 . MakeIntruder(u) @t1   ==> F)
+
+         & not (addrA = addrB)     
+
+
+         &A_0_addrA(uid, addrA) @A_0_addrA
+         &B_0_addrB(uid, addrA, addrB) @B_0_addrB
+
+         & A_1_branch(uid, addrA, addrB, ska, pka) @A_1_branch
+         & B_1_branch(uid, addrA, addrB, pka, skb, pkb) @B_1_branch
+         & B_PE_2_show(uid, addrA, addrB, pka, skb, pkb, ra, rb, Kpe, userView) @B_PE_2_show
+         & A_PE_2_enter(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, Kpe, userView, Kpe1, cra1) @A_PE_2_enter
+         & B_PE_3_crb1(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1,  Kpe, Kpe1, crb1, cra1) @B_PE_3_crb1
+
+         & A_PE_3_na1(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, Kpe, Kpe1, cra1, crb1) @A_PE_3_na1
+         & B_PE_4_nb1(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, Kpe, Kpe1, crb1, cra1,  na1) @B_PE_4_nb1
+
+         & A_PE_4_cra2(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1) @A_PE_4_cra2
+
+         & B_PE_5_crb2(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2) @B_PE_5_crb2
+         & A_PE_5_na2(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2) @A_PE_5_na2
+         & B_PE_6_nb2_close(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2) @B_PE_6_nb2_close
+         & A_PE_6_close(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2) @A_PE_6_close
+
+         & A_7_ea(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea) @A_7_ea
+         & B_7_eb(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea) @B_7_eb
+
+         & A_8_randA(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb,  randA) @A_8_randA
+         & B_8_randA(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea, randA, randB) @B_8_randA
+          
+         & A_9_sendD(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks) @A_9_sendD
+         & B_9_rcvD(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea, randA, randB, data, Ks, ack) @B_9_rcvD
+         & A_10_rcvAck(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks, ack) @A_10_rcvAck
+
+
+         "
+    
+    // PE with A showing passcode
+    lemma honestRun_PE_AShow [heuristic=s]:
+         exists-trace
+         "
+         Ex
+         addrA
+         addrB
+
+         uid
+
+         #A_0_addrA
+         #B_0_addrB
+
+
+         ska pka
+         #A_1_branch
+
+
+         skb pkb userView Kpe
+         #B_1_branch
+         ra
+         rb 
+
+         na1 Kpe1 cra1
+         #A_PE_2_show
+
+         #B_PE_2_enter
+
+         nb1 crb1
+         #B_PE_3_crb1
+
+
+         #A_PE_3_na1
+
+         #B_PE_4_nb1
+
+         na2 Kpe2 cra2
+         #A_PE_4_cra2
+
+         nb2 crb2
+         #B_PE_5_crb2
+
+         #A_PE_5_na2
+
+         #B_PE_6_nb2_close
+
+         #A_PE_6_close
+
+         Kdh Kmac Klt ea
+         #A_7_ea
+
+         eb
+         #B_7_eb
+
+          randA randB
+         #B_8_randA
+         #A_8_randA
+
+
+         data Ks  
+         #A_9_sendD
+
+         ack
+         #B_9_rcvD
+         #A_10_rcvAck
+
+
+         .
+
+         // restrict one user
+
+         (All u1 u2 #guid1 #guid2. GenUserIDs(u1) @guid1 & GenUserIDs(u2) @guid2 ==> #guid1 = #guid2) 
+         
+         // restrict one Kpe
+         & (All u1 Kpe1 u2 Kpe2 #gKpe1 #gKpe2. GenKpe(u1, Kpe1) @gKpe1 & GenKpe(u2, Kpe2) @gKpe2 ==> #gKpe1 = #gKpe2) 
+
+         // restrict one A side thread
+         & (All #t1 #t2. A_thread() @t1 & A_thread() @t2   ==> #t1 = #t2) 
+
+         // restrict one B side thread
+         & (All #t1 #t2. B_thread() @t1 & B_thread() @t2   ==> #t1 = #t2) 
+
+         // without intruder 
+         & (All u #t1 . MakeIntruder(u) @t1   ==> F)
+
+         & not (addrA = addrB)     
+
+
+         &A_0_addrA(uid, addrA) @A_0_addrA
+         &B_0_addrB(uid, addrA, addrB) @B_0_addrB
+
+         & A_1_branch(uid, addrA, addrB, ska, pka) @A_1_branch
+         & B_1_branch(uid, addrA, addrB, pka, skb, pkb) @B_1_branch
+         & A_PE_2_show(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, Kpe, userView, Kpe1, cra1) @A_PE_2_show
+         & B_PE_2_enter(uid, addrA, addrB, pka, skb, pkb, ra, rb, Kpe, userView) @B_PE_2_enter
+         & B_PE_3_crb1(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1,  Kpe, Kpe1, crb1, cra1) @B_PE_3_crb1
+
+         & A_PE_3_na1(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, Kpe, Kpe1, cra1, crb1) @A_PE_3_na1
+         & B_PE_4_nb1(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, Kpe, Kpe1, crb1, cra1,  na1) @B_PE_4_nb1
+
+         & A_PE_4_cra2(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1) @A_PE_4_cra2
+
+         & B_PE_5_crb2(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2) @B_PE_5_crb2
+         & A_PE_5_na2(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2) @A_PE_5_na2
+         & B_PE_6_nb2_close(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2) @B_PE_6_nb2_close
+         & A_PE_6_close(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2) @A_PE_6_close
+
+
+         & A_7_ea(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea) @A_7_ea
+         & B_7_eb(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea) @B_7_eb
+
+          
+         & A_8_randA(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb,  randA) @A_8_randA
+         & B_8_randA(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea, randA, randB) @B_8_randA
+          
+         & A_9_sendD(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks) @A_9_sendD
+         & B_9_rcvD(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea, randA, randB, data, Ks, ack) @B_9_rcvD
+         & A_10_rcvAck(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks, ack) @A_10_rcvAck
+
+         "
+   
+   // PE pairing with with both side enter the same passcode 
+    lemma honestRun_PE_Both_Enter [heuristic=s]:
+         exists-trace
+         "
+         Ex
+         addrA
+         addrB
+
+         uid
+
+         #A_0_addrA
+         #B_0_addrB
+
+
+         ska pka
+         #A_1_branch
+
+
+         skb pkb Kpe
+         #B_1_branch
+         ra
+         rb 
+
+         na1 Kpe1 cra1
+         #A_PE_2_both_enter
+         #B_PE_2_both_enter
+
+         nb1 crb1
+         #B_PE_3_crb1
+
+
+         #A_PE_3_na1
+
+         #B_PE_4_nb1
+
+         na2 Kpe2 cra2
+         #A_PE_4_cra2
+
+         nb2 crb2
+         #B_PE_5_crb2
+
+         #A_PE_5_na2
+
+         #B_PE_6_nb2_close
+
+         #A_PE_6_close
+
+         Kdh Kmac Klt ea
+         #A_7_ea
+
+        eb
+         #B_7_eb
+
+          randA randB
+         #B_8_randA
+         #A_8_randA
+
+
+         data Ks  
+         #A_9_sendD
+
+         ack
+         #B_9_rcvD
+         #A_10_rcvAck
+
+
+         .
+
+         // restrict one user
+
+         (All u1 u2 #guid1 #guid2. GenUserIDs(u1) @guid1 & GenUserIDs(u2) @guid2 ==> #guid1 = #guid2) 
+         
+         // restrict one Kpe
+         & (All u1 Kpe1 u2 Kpe2 #gKpe1 #gKpe2. GenKpe(u1, Kpe1) @gKpe1 & GenKpe(u2, Kpe2) @gKpe2 ==> #gKpe1 = #gKpe2) 
+
+         // restrict one A side thread
+         & (All #t1 #t2. A_thread() @t1 & A_thread() @t2   ==> #t1 = #t2) 
+
+         // restrict one B side thread
+         & (All #t1 #t2. B_thread() @t1 & B_thread() @t2   ==> #t1 = #t2) 
+
+         // without intruder 
+         & (All u #t1 . MakeIntruder(u) @t1   ==> F)
+
+         & not (addrA = addrB)     
+
+
+         &A_0_addrA(uid, addrA) @A_0_addrA
+         &B_0_addrB(uid, addrA, addrB) @B_0_addrB
+
+         & A_1_branch(uid, addrA, addrB, ska, pka) @A_1_branch
+         & B_1_branch(uid, addrA, addrB, pka, skb, pkb) @B_1_branch
+
+         & A_PE_2_both_enter(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, Kpe, Kpe1, cra1) @A_PE_2_both_enter
+         & B_PE_2_both_enter(uid, addrA, addrB, pka, skb, pkb, ra, rb, Kpe) @B_PE_2_both_enter
+         
+
+         & B_PE_3_crb1(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1,  Kpe, Kpe1, crb1, cra1) @B_PE_3_crb1
+
+         & A_PE_3_na1(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, Kpe, Kpe1, cra1, crb1) @A_PE_3_na1
+         & B_PE_4_nb1(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, Kpe, Kpe1, crb1, cra1,  na1) @B_PE_4_nb1
+
+         & A_PE_4_cra2(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1) @A_PE_4_cra2
+
+         & B_PE_5_crb2(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2) @B_PE_5_crb2
+         & A_PE_5_na2(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2) @A_PE_5_na2
+         & B_PE_6_nb2_close(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2) @B_PE_6_nb2_close
+         & A_PE_6_close(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2) @A_PE_6_close
+
+
+         & A_7_ea(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea) @A_7_ea
+         & B_7_eb(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea) @B_7_eb
+
+          
+         & A_8_randA(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb,  randA) @A_8_randA
+         & B_8_randA(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea, randA, randB) @B_8_randA
+          
+         & A_9_sendD(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks) @A_9_sendD
+         & B_9_rcvD(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb1, nb2, Kpe, Kpe1, Kpe2, crb1, crb2, cra1, na1, cra2, na2, Kdh, Klt, Kmac, eb, ea, randA, randB, data, Ks, ack) @B_9_rcvD
+         & A_10_rcvAck(uid, addrA, addrB, ska, pka, pkb, ra, rb, na1, na2, Kpe, Kpe1, Kpe2, cra1, cra2, crb1, nb1, crb2, nb2, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks, ack) @A_10_rcvAck
+
+         "
+   
+    // NC pairing
+    lemma honestRun_NC [heuristic=s]:
+        exists-trace
+        "
+        Ex
+        addrA
+        addrB
+
+        uid
+
+        #A_0_addrA
+        #B_0_addrB
+
+
+        ska pka
+        #A_1_branch
+        
+        skb pkb 
+        #B_1_branch
+
+        ra rb nb cr
+        #B_NC_2_cr_pkb
+
+        na
+        #A_NC_2_na
+
+        #B_NC_3_nb
+
+        Knc Knc_userview_A
+        #A_NC_3_show
+
+        Knc_userview_B
+        #B_NC_4_show
+        
+        #B_NC_5_verify_close
+        #A_NC_4_verify_close
+
+         dummy kpe1_dummy kpe2_dummy cra1_dummy cra2_dummy Kdh Kmac Klt ea
+         #A_7_ea
+
+         
+         eb  dummyB kpe1_dummyB kpe2_dummyB cra1_dummyB cra2_dummyB 
+         #B_7_eb
+
+        randA randB
+         #B_8_randA
+         #A_8_randA
+
+
+         data Ks  
+         #A_9_sendD
+
+         ack
+         #B_9_rcvD
+         #A_10_rcvAck
+         .
+
+              // restrict one user
+
+         (All u1 u2 #guid1 #guid2. GenUserIDs(u1) @guid1 & GenUserIDs(u2) @guid2 ==> #guid1 = #guid2) 
+
+
+              // restrict one A side thread
+         & (All #t1 #t2. A_thread() @t1 & A_thread() @t2   ==> #t1 = #t2) 
+
+         // restrict one B side thread
+         & (All #t1 #t2. B_thread() @t1 & B_thread() @t2   ==> #t1 = #t2) 
+
+
+        // without intruder 
+        & (All u #t1 . MakeIntruder(u) @t1   ==> F)     
+          & not (addrA = addrB)     
+
+        &A_0_addrA(uid, addrA) @A_0_addrA
+        &B_0_addrB(uid, addrA, addrB) @B_0_addrB
+
+        &  A_1_branch(uid, addrA, addrB, ska, pka)  @A_1_branch
+        & B_1_branch(uid, addrA, addrB, pka, skb, pkb) @B_1_branch
+       & B_NC_2_cr_pkb(uid, addrA, addrB, pka, skb, pkb, ra, rb, nb, cr) @B_NC_2_cr_pkb
+       & A_NC_2_na(uid, addrA, addrB, ska, pka, pkb, ra, rb, na, cr) @A_NC_2_na
+       & B_NC_3_nb(uid, addrA, addrB, pka, skb, pkb, ra, rb, na, nb, cr) @B_NC_3_nb
+
+       & A_NC_3_show(uid, addrA, addrB, ska, pka, pkb, ra, rb, na, nb, cr, Knc, Knc_userview_A) @A_NC_3_show
+       & B_NC_4_show(uid, addrA, addrB, pka, skb, pkb, ra, rb, na, nb, cr, Knc, Knc_userview_B, Knc_userview_A) @B_NC_4_show
+
+       & B_NC_5_verify_close(uid, addrA, addrB, pka, skb, pkb, ra, rb, na, nb, cr, Knc, Knc_userview_B, Knc_userview_A) @B_NC_5_verify_close
+
+       & A_NC_4_verify_close(uid, addrA, addrB, ska, pka, pkb, ra, rb, na, nb, cr, Knc, Knc_userview_A, Knc_userview_B) @A_NC_4_verify_close
+      
+
+       & A_7_ea(uid, addrA, addrB, ska, pka, pkb, ra, rb,  dummy,   na, dummy, kpe1_dummy, kpe2_dummy, cra1_dummy, cra2_dummy, cra1_dummy, dummy, cra2_dummy, nb, Kdh, Kmac, Klt, ea) @A_7_ea
+       & B_7_eb(uid, addrA, addrB, pka, skb, pkb, ra, rb, dummyB,   nb, dummyB,  kpe1_dummyB,   kpe2_dummyB, cra1_dummyB,  cra2_dummyB,      cra1_dummyB,       dummyB,      cra2_dummyB, na, Kdh, Klt, Kmac, eb, ea) @B_7_eb
+        
+       & A_8_randA(uid, addrA, addrB, ska, pka, pkb, ra, rb,  dummy,   na, dummy, kpe1_dummy, kpe2_dummy, cra1_dummy, cra2_dummy, cra1_dummy, dummy, cra2_dummy, nb, Kdh, Kmac, Klt, ea, eb,  randA) @A_8_randA
+         & B_8_randA(uid, addrA, addrB, pka, skb, pkb, ra, rb, dummyB,   nb, dummyB,  kpe1_dummyB,   kpe2_dummyB, cra1_dummyB,  cra2_dummyB,      cra1_dummyB,       dummyB,      cra2_dummyB, na, Kdh, Klt, Kmac, eb, ea, randA, randB) @B_8_randA
+          
+         & A_9_sendD(uid, addrA, addrB, ska, pka, pkb, ra, rb,  dummy,   na, dummy, kpe1_dummy, kpe2_dummy, cra1_dummy, cra2_dummy, cra1_dummy, dummy, cra2_dummy, nb, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks) @A_9_sendD
+         & B_9_rcvD(uid, addrA, addrB, pka, skb, pkb, ra, rb, dummyB,   nb, dummyB,  kpe1_dummyB,   kpe2_dummyB, cra1_dummyB,  cra2_dummyB,      cra1_dummyB,       dummyB,      cra2_dummyB, na, Kdh, Klt, Kmac, eb, ea, randA, randB, data, Ks, ack) @B_9_rcvD
+         & A_10_rcvAck(uid, addrA, addrB, ska, pka, pkb, ra, rb,  dummy,   na, dummy, kpe1_dummy, kpe2_dummy, cra1_dummy, cra2_dummy, cra1_dummy, dummy, cra2_dummy, nb, Kdh, Kmac, Klt, ea, eb, randA, randB, data, Ks, ack) @A_10_rcvAck
+
+
+        "
+
+// // ------------------------------------------------------------------------- Modeled properties Lemmas 
+    
+    // User ID and DH private key remains secret throughout the model execution
+    lemma uid_and_DH_private_keys_are_secret [heuristic=s]:
+        "
+        All uid addrA addrB privDH #i. 
+
+        AB_coreVar(uid, addrA, addrB, privDH) @i 
+         & not (Ex #mi. MakeIntruder(uid) @mi) 
+        ==> 
+            not (Ex #k. !KU(uid) @k) & not (Ex #k. !KU(privDH) @k) 
+        "
+
+
+    // Intruder's access to commitment message access is only after nonce exchange
+    lemma commitment_msg_can_not_be_decrypted_before_nonce_exchange [heuristic=s]:
+        "All uid conf_cipher key #cs.
+
+        Conf_send(uid, conf_cipher, key ) @cs 
+        & not (Ex #mi. MakeIntruder(uid) @mi) 
+
+        ==>
+          not (Ex #k. k < cs & !KU(key) @k)
+
+        " 
+
+
+// ------------------------------ Security Lemmas -----------------------------------------------------------
+// ----------------------------------------------------------------------------------------------------------
+
+
+    // In all Lemma names the ending letter A or B indicate that the lemma property
+    // is observed from the view of the mentioned entity       
+
+    // Standard confidentiality lemma assumes only legitimate receiving end and 
+    // reason about the secrecy of data. 
+
+    // The lemma below is a sub-property for confidentiality because it assumes
+    // both sending (A) and receiving (B) end as legitimate, and then state 
+    // that the intruder can not access the data 
+
+    lemma confidentiality_sub_property_data_B:
+        "
+        All uid1 uid2 addrA addrB  data key #a #b.
+          A_send(uid1, addrA, addrB, data, key) @a
+         & B_rcv(uid2, addrA, addrB, data, key) @b
+         & not (Ex #i. MakeIntruder(uid1) @i ) 
+         & not (Ex #i. MakeIntruder(uid2) @i ) 
+         ==> 
+            not (Ex #i. !KU(data) @i ) 
+            
+        "
+
+    // same as above from A's perspective     
+    
+    lemma confidentiality_sub_property_data_A:
+        "
+        All uid1 uid2 addrA addrB data key #a #b.
+          B_send(uid1, addrA, addrB, data, key) @a
+         & A_rcv(uid2, addrA, addrB, data, key) @b
+         & not (Ex #i. MakeIntruder(uid1) @i ) 
+         & not (Ex #i. MakeIntruder(uid2) @i ) 
+
+         ==> 
+            not (Ex #i. !KU(data) @i ) 
+            
+        "
+
+    // Data steal lemmas reason weather an intruder can 
+    // manage to receive a data from an legitimate entity (A below)     
+
+    lemma data_steal_from_A:
+        "
+        All uid1 uid2 addrA addrB data key #a #b.
+          A_send(uid1, addrA, addrB, data, key) @a
+         & not (Ex #i. MakeIntruder(uid1) @i ) 
+         & B_rcv(uid2, addrA, addrB, data, key) @b
+
+         ==> 
+             not (Ex #i. MakeIntruder(uid2) @i )    
+            
+        "
+
+   // standard weak authentication lemma 
+    lemma auth_weak_B:
+        "
+        All uid addrA addrB data key 
+        #b
+         .
+         B_rcv(uid, addrA, addrB, data, key) @b
+         & not (Ex #i. MakeIntruder(uid) @i )
+         
+         ==> (Ex #a. A_send(uid, addrA, addrB, data, key) @a & #a < #b)         
+            
+        "
+
+
+    // standard confidentiality lemma on data from B's perspective     
+    lemma confidentiality_data_B:
+        "
+        All uid addrA addrB  data key #b.
+         B_rcv(uid, addrA, addrB, data, key) @b
+         & not (Ex #i. MakeIntruder(uid) @i ) 
+         ==> 
+            not (Ex #i. !KU(data) @i ) 
+            
+        "
+
+   // standard confidentiality lemma on data from A's perspective
+    lemma confidentiality_data_A :
+        "
+        All uid addrA addrB data key #a .
+         A_rcv(uid, addrA, addrB, data, key) @a
+         & not (Ex #i. MakeIntruder(uid) @i ) 
+         ==> 
+            not (Ex #i. !KU(data) @i ) 
+            
+        "
+
+
+
+    // standard weak authentication lemma 
+    lemma auth_weak_A:
+        "
+        All uid addrA addrB data key 
+        #a
+         .
+         A_rcv(uid, addrA, addrB, data, key) @a
+            & not(Ex #i. MakeIntruder(uid) @i )    
+         
+         ==> (Ex #b. B_send(uid, addrA, addrB, data, key) @b & #b < #a)
+            
+        "
+
+ 
+    // Data inject lemmas reason weather an intruder can 
+    // manage to inject a malicious data to a legitimate entity (B below)  
+    lemma data_inject_at_B :
+        "
+        All uid1 uid2 addrA addrB data key #a #b.
+          A_send(uid1, addrA, addrB, data, key) @a
+         & B_rcv(uid2, addrA, addrB, data, key) @b
+         & not (Ex #i. MakeIntruder(uid2) @i ) 
+
+         ==> 
+             not (Ex #i. MakeIntruder(uid1) @i )    
+            
+        "
+
+
+    // Data steal lemmas reason weather an intruder can 
+    // manage to receive a data from an legitimate entity (B below)  
+    lemma data_steal_from_B :
+        "
+        All uid1 uid2 addrA addrB data key #a #b.
+          B_send(uid1, addrA, addrB, data, key) @a
+         & not (Ex #i. MakeIntruder(uid1) @i ) 
+         & A_rcv(uid2, addrA, addrB, data, key) @b
+
+         ==> 
+             not (Ex #i. MakeIntruder(uid2) @i )    
+            
+            "
+
+    // Data inject lemmas reason weather an intruder can 
+    // manage to inject a malicious data to a legitimate entity (A below)  
+lemma data_inject_at_A:
+        "
+        All uid1 uid2 addrA addrB data key #a #b.
+          B_send(uid1, addrA, addrB, data, key) @a
+         & A_rcv(uid2, addrA, addrB, data, key) @b
+         & not (Ex #i. MakeIntruder(uid2) @i ) 
+
+         ==> 
+             not (Ex #i. MakeIntruder(uid1) @i )    
+            
+        "
+
+
+end 
