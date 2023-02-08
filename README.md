@@ -46,3 +46,7 @@ How to run the model files:
   `python3 gen_proof.py --tam_code_file <patched_file_full_path>  --timeout_min 1440 --trace_algos SEQDFS`
 
 Here the `patched_file_full_path` should be a full path e.g., /home/user/dir/patched.spthy . The run time for the patched model is  approximately 1 day and 7 hours for all lemmas. Individual lemmas run times is provided in a separate file `run_times_of_lemmas.txt`.
+
+## Acknowledgment
+
+We thank Cas Cremers, Jannik Dreier and Ralf Sasse for Tamarin related discussion on [Google group](https://groups.google.com/g/tamarin-prover/c/6pr-mudKmwY) and for providing insight into Tamarin.
