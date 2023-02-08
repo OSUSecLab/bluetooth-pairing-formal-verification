@@ -20,7 +20,7 @@ Run Time: ~1h 3m 45s
 
 builtins: multiset, symmetric-encryption
 
-
+// Bit Split theory is based on Google group discussion here https://groups.google.com/g/tamarin-prover/c/6pr-mudKmwY
 functions: MAC/2, h/1, split1/1, split2/1, merge/2,
            dhs/1, dhp/1, dha/2, dhb/2 
            
